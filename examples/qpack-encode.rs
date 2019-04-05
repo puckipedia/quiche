@@ -25,12 +25,14 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #[macro_use]
-extern crate log;
+extern crate slog;
 
 use std::fs::File;
 
 use std::io::prelude::*;
 use std::io::BufReader;
+
+use sloggers::Build;
 
 use quiche::h3;
 
@@ -43,11 +45,15 @@ Options:
 ";
 
 fn main() -> Result<(), Box<std::error::Error>> {
-    env_logger::init();
-
     let args = docopt::Docopt::new(USAGE)
         .and_then(|dopt| dopt.parse())
         .unwrap_or_else(|e| e.exit());
+
+    let log = sloggers::terminal::TerminalLoggerBuilder::new()
+        .level(sloggers::types::Severity::Trace)
+        .channel_size(4096)
+        .build()
+        .unwrap();
 
     let file = File::open(args.get_str("FILE"))?;
     let file = BufReader::new(&file);
@@ -68,7 +74,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
             let len = enc.encode(&headers, &mut out)?;
 
-            debug!("Writing header block stream={} len={}", stream_id, len);
+            debug!(log, "Writing header block stream={} len={}", stream_id, len);
 
             std::io::stdout().write_all(&stream_id.to_be_bytes())?;
             std::io::stdout().write_all(&(len as u32).to_be_bytes())?;

@@ -94,10 +94,8 @@ impl Decoder {
 
         let mut out = Vec::new();
 
-        let req_insert_count = decode_int(&mut b, 8)?;
-        let base = decode_int(&mut b, 7)?;
-
-        trace!("Header count={} base={}", req_insert_count, base);
+        let _req_insert_count = decode_int(&mut b, 8)?;
+        let _base = decode_int(&mut b, 7)?;
 
         while b.cap() > 0 {
             let first = b.peek_u8()?;
@@ -109,8 +107,6 @@ impl Decoder {
                     let s = first & STATIC == STATIC;
                     let index = decode_int(&mut b, 6)?;
 
-                    trace!("Indexed index={} static={}", index, s);
-
                     if !s {
                         unimplemented!("dynamic table");
                     }
@@ -120,9 +116,7 @@ impl Decoder {
                 },
 
                 Representation::IndexedWithPostBase => {
-                    let index = decode_int(&mut b, 4)?;
-
-                    trace!("Indexed With Post Base index={}", index);
+                    let _index = decode_int(&mut b, 4)?;
 
                     unimplemented!("dynamic table");
                 },
@@ -142,12 +136,6 @@ impl Decoder {
                         .map_err(|_| Error::InvalidHeaderValue)?;
                     let value = decode_str(&mut b)?;
 
-                    trace!(
-                        "Literal Without Name Reference name={:?} value={:?}",
-                        name,
-                        value
-                    );
-
                     out.push(Header::new(&name, &value));
                 },
 
@@ -158,13 +146,6 @@ impl Decoder {
                     let name_idx = decode_int(&mut b, 4)?;
                     let value = decode_str(&mut b)?;
 
-                    trace!(
-                        "Literal name_idx={} static={} value={:?}",
-                        name_idx,
-                        s,
-                        value
-                    );
-
                     if !s {
                         unimplemented!("dynamic table");
                     }
@@ -174,8 +155,6 @@ impl Decoder {
                 },
 
                 Representation::LiteralWithPostBase => {
-                    trace!("Literal With Post Base");
-
                     unimplemented!("dynamic table");
                 },
             }

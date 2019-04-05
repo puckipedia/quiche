@@ -25,11 +25,13 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #[macro_use]
-extern crate log;
+extern crate slog;
 
 use std::fs::File;
 
 use std::io::prelude::*;
+
+use sloggers::Build;
 
 use quiche::h3::qpack;
 
@@ -42,11 +44,15 @@ Options:
 ";
 
 fn main() -> Result<(), Box<std::error::Error>> {
-    env_logger::init();
-
     let args = docopt::Docopt::new(USAGE)
         .and_then(|dopt| dopt.parse())
         .unwrap_or_else(|e| e.exit());
+
+    let log = sloggers::terminal::TerminalLoggerBuilder::new()
+        .level(sloggers::types::Severity::Trace)
+        .channel_size(4096)
+        .build()
+        .unwrap();
 
     // TODO: parse params from file name.
 
@@ -72,7 +78,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
             break;
         }
 
-        debug!("Got stream={} len={}", stream_id, len);
+        debug!(log, "Got stream={} len={}", stream_id, len);
 
         if stream_id == 0 {
             dec.control(&mut data[..len])?;

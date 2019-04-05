@@ -25,9 +25,11 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #[macro_use]
-extern crate log;
+extern crate slog;
 
 use ring::rand::*;
+
+use sloggers::Build;
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
 
@@ -48,13 +50,15 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let mut buf = [0; 65535];
     let mut out = [0; MAX_DATAGRAM_SIZE];
 
-    env_logger::builder()
-        .default_format_timestamp_nanos(true)
-        .init();
-
     let args = docopt::Docopt::new(USAGE)
         .and_then(|dopt| dopt.parse())
         .unwrap_or_else(|e| e.exit());
+
+    let log = sloggers::terminal::TerminalLoggerBuilder::new()
+        .level(sloggers::types::Severity::Info)
+        .channel_size(4096)
+        .build()
+        .unwrap();
 
     let url = url::Url::parse(args.get_str("URL"))?;
 
@@ -85,6 +89,8 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let version = u32::from_str_radix(version, 16)?;
 
     let mut config = quiche::Config::new(version)?;
+
+    config.logger(log.clone());
 
     config.verify_peer(true);
 
@@ -119,12 +125,12 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let write = match conn.send(&mut out) {
         Ok(v) => v,
 
-        Err(e) => panic!("{} initial send failed: {:?}", conn.trace_id(), e),
+        Err(e) => panic!("initial send failed: {:?}", e),
     };
 
     socket.send(&out[..write])?;
 
-    debug!("{} written {}", conn.trace_id(), write);
+    debug!(log, "written {}", write);
 
     let req_start = std::time::Instant::now();
 
@@ -133,7 +139,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
         'read: loop {
             if events.is_empty() {
-                debug!("timed out");
+                debug!(log, "timed out");
 
                 conn.on_timeout();
 
@@ -145,7 +151,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::WouldBlock {
-                        debug!("recv() would block");
+                        debug!(log, "recv() would block");
                         break 'read;
                     }
 
@@ -153,29 +159,29 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 },
             };
 
-            debug!("{} got {} bytes", conn.trace_id(), len);
+            debug!(log, "got {} bytes", len);
 
             // Process potentially coalesced packets.
             let read = match conn.recv(&mut buf[..len]) {
                 Ok(v) => v,
 
                 Err(quiche::Error::Done) => {
-                    debug!("{} done reading", conn.trace_id());
+                    debug!(log, "done reading");
                     break;
                 },
 
                 Err(e) => {
-                    error!("{} recv failed: {:?}", conn.trace_id(), e);
+                    error!(log, "recv failed: {:?}", e);
                     conn.close(false, e.to_wire(), b"fail").ok();
                     break 'read;
                 },
             };
 
-            debug!("{} processed {} bytes", conn.trace_id(), read);
+            debug!(log, "processed {} bytes", read);
         }
 
         if conn.is_closed() {
-            info!("{} connection closed, {:?}", conn.trace_id(), conn.stats());
+            info!(log, "connection closed, {:?}", conn.stats());
             break;
         }
 
@@ -200,10 +206,10 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 quiche::h3::Header::new("user-agent", "quiche"),
             ];
 
-            info!("{} sending HTTP request {:?}", conn.trace_id(), req);
+            info!(log, "sending HTTP request"; "headers" => ?req);
 
             if let Err(e) = h3_conn.send_request(&mut conn, &req, true) {
-                error!("{} failed to send request {:?}", conn.trace_id(), e);
+                error!(log, "failed to send request {:?}", e);
                 break;
             }
 
@@ -214,20 +220,16 @@ fn main() -> Result<(), Box<std::error::Error>> {
             loop {
                 match http3_conn.poll(&mut conn) {
                     Ok((stream_id, quiche::h3::Event::Headers(headers))) => {
-                        info!(
-                            "{} got response headers {:?} on stream id {}",
-                            conn.trace_id(),
-                            headers,
-                            stream_id
+                        info!(log, "got HTTP response headers";
+                            "headers" => ?headers,
+                            "stream" => stream_id,
                         );
                     },
 
                     Ok((stream_id, quiche::h3::Event::Data(data))) => {
-                        debug!(
-                            "{} got response data of length {} in stream id {}",
-                            conn.trace_id(),
-                            data.len(),
-                            stream_id
+                        debug!(log, "got HTTP response data";
+                            "len" => data.len(),
+                            "stream" => stream_id,
                         );
 
                         print!("{}", unsafe {
@@ -236,8 +238,8 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
                         if conn.stream_finished(stream_id) {
                             info!(
-                                "{} response received in {:?}, closing...",
-                                conn.trace_id(),
+                                log,
+                                "response received in {:?}, closing...",
                                 req_start.elapsed()
                             );
 
@@ -255,12 +257,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
                     },
 
                     Err(e) => {
-                        error!(
-                            "{} HTTP/3 processing failed: {:?}",
-                            conn.trace_id(),
-                            e
-                        );
-
+                        error!(log, "HTTP/3 processing failed: {:?}", e);
                         break;
                     },
                 }
@@ -272,12 +269,12 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 Ok(v) => v,
 
                 Err(quiche::Error::Done) => {
-                    debug!("{} done writing", conn.trace_id());
+                    debug!(log, "done writing");
                     break;
                 },
 
                 Err(e) => {
-                    error!("{} send failed: {:?}", conn.trace_id(), e);
+                    error!(log, "send failed: {:?}", e);
                     conn.close(false, e.to_wire(), b"fail").ok();
                     break;
                 },
@@ -286,11 +283,11 @@ fn main() -> Result<(), Box<std::error::Error>> {
             // TODO: coalesce packets.
             socket.send(&out[..write])?;
 
-            debug!("{} written {}", conn.trace_id(), write);
+            debug!(log, "written {}", write);
         }
 
         if conn.is_closed() {
-            info!("{} connection closed, {:?}", conn.trace_id(), conn.stats());
+            info!(log, "connection closed, {:?}", conn.stats());
             break;
         }
     }

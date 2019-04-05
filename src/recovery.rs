@@ -32,6 +32,8 @@ use std::time::Instant;
 
 use std::collections::BTreeMap;
 
+use slog::Logger;
+
 use crate::frame;
 use crate::packet;
 use crate::ranges;
@@ -168,7 +170,7 @@ impl Default for Recovery {
 
 impl Recovery {
     pub fn on_packet_sent(
-        &mut self, pkt: Sent, epoch: packet::Epoch, now: Instant, trace_id: &str,
+        &mut self, pkt: Sent, epoch: packet::Epoch, now: Instant,
     ) {
         let pkt_num = pkt.pkt_num;
         let ack_eliciting = pkt.ack_eliciting;
@@ -194,13 +196,11 @@ impl Recovery {
 
             self.set_loss_detection_timer();
         }
-
-        trace!("{} {:?}", trace_id, self);
     }
 
     pub fn on_ack_received(
         &mut self, ranges: &ranges::RangeSet, ack_delay: u64,
-        epoch: packet::Epoch, now: Instant, trace_id: &str,
+        epoch: packet::Epoch, now: Instant, log: &Logger,
     ) {
         self.largest_acked_pkt[epoch] =
             cmp::max(self.largest_acked_pkt[epoch], ranges.largest().unwrap());
@@ -220,7 +220,7 @@ impl Recovery {
             has_newly_acked = cmp::max(has_newly_acked, newly_acked);
 
             if newly_acked {
-                trace!("{} packet newly acked {}", trace_id, pn);
+                trace!(log, "packet newly acked"; "pkt_num" => pn);
             }
         }
 
@@ -228,21 +228,19 @@ impl Recovery {
             return;
         }
 
-        self.detect_lost_packets(epoch, now, trace_id);
+        self.detect_lost_packets(epoch, now, log);
 
         self.crypto_count = 0;
         self.pto_count = 0;
 
         self.set_loss_detection_timer();
-
-        trace!("{} {:?}", trace_id, self);
     }
 
-    pub fn on_loss_detection_timeout(&mut self, now: Instant, trace_id: &str) {
+    pub fn on_loss_detection_timeout(&mut self, now: Instant, log: &Logger) {
         let (loss_time, epoch) = self.earliest_loss_time();
 
         if loss_time.is_some() {
-            self.detect_lost_packets(epoch, now, trace_id);
+            self.detect_lost_packets(epoch, now, log);
         } else if self.crypto_bytes_in_flight > 0 {
             // Retransmit unacked data from all packet number spaces.
             for e in packet::EPOCH_INITIAL..packet::EPOCH_COUNT {
@@ -251,7 +249,7 @@ impl Recovery {
                 }
             }
 
-            trace!("{} resend unacked crypto data ({:?})", trace_id, self);
+            trace!(log, "resend unacked crypto data");
 
             self.crypto_count += 1;
         } else {
@@ -260,8 +258,6 @@ impl Recovery {
         }
 
         self.set_loss_detection_timer();
-
-        trace!("{} {:?}", trace_id, self);
     }
 
     pub fn drop_unacked_data(&mut self, epoch: packet::Epoch) {
@@ -387,7 +383,7 @@ impl Recovery {
     }
 
     fn detect_lost_packets(
-        &mut self, epoch: packet::Epoch, now: Instant, trace_id: &str,
+        &mut self, epoch: packet::Epoch, now: Instant, log: &Logger,
     ) {
         let mut lost_pkt: Vec<u64> = Vec::new();
 
@@ -404,11 +400,9 @@ impl Recovery {
         for (_, unacked) in self.sent[epoch].range(..=largest_acked) {
             if unacked.time <= lost_send_time || unacked.pkt_num <= lost_pkt_num {
                 if unacked.in_flight {
-                    trace!(
-                        "{} packet {} lost on epoch {}",
-                        trace_id,
-                        unacked.pkt_num,
-                        epoch
+                    trace!(log, "packet lost";
+                        "pkt_num" => unacked.pkt_num,
+                        "epoch" => epoch,
                     );
                 }
 
@@ -540,9 +534,7 @@ impl std::fmt::Debug for Recovery {
                 }
             },
 
-            None => {
-                write!(f, "timer=none ")?;
-            },
+            None => write!(f, "timer=none ")?,
         };
 
         write!(f, "crypto={} ", self.crypto_bytes_in_flight)?;
@@ -553,6 +545,38 @@ impl std::fmt::Debug for Recovery {
         write!(f, "min_rtt={:?} ", self.min_rtt)?;
         write!(f, "rttvar={:?} ", self.rttvar)?;
         write!(f, "probes={} ", self.probes)?;
+
+        Ok(())
+    }
+}
+
+impl slog::KV for Recovery {
+    fn serialize(
+        &self, _r: &slog::Record, s: &mut slog::Serializer,
+    ) -> slog::Result {
+        match self.loss_detection_timer {
+            Some(v) => {
+                let now = Instant::now();
+
+                if v > now {
+                    let d = v.duration_since(now);
+                    s.emit_arguments("timer", &format_args!("{:?}", d))?;
+                } else {
+                    s.emit_str("timer", "exp")?;
+                }
+            },
+
+            None => s.emit_none("timer")?,
+        };
+
+        s.emit_usize("crypto", self.crypto_bytes_in_flight)?;
+        s.emit_usize("inflight", self.bytes_in_flight)?;
+        s.emit_usize("cwnd", self.cwnd)?;
+        s.emit_arguments("latest_rtt", &format_args!("{:?}", self.latest_rtt))?;
+        s.emit_arguments("srtt", &format_args!("{:?}", self.smoothed_rtt))?;
+        s.emit_arguments("min_rtt", &format_args!("{:?}", self.min_rtt))?;
+        s.emit_arguments("rttvar", &format_args!("{:?}", self.rttvar))?;
+        s.emit_usize("probes", self.probes)?;
 
         Ok(())
     }

@@ -25,13 +25,16 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #[macro_use]
-extern crate log;
+extern crate slog;
 
 use std::net;
 
 use std::collections::HashMap;
 
 use ring::rand::*;
+
+use slog::Logger;
+use sloggers::Build;
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
 
@@ -61,13 +64,15 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let mut buf = [0; 65535];
     let mut out = [0; MAX_DATAGRAM_SIZE];
 
-    env_logger::builder()
-        .default_format_timestamp_nanos(true)
-        .init();
-
     let args = docopt::Docopt::new(USAGE)
         .and_then(|dopt| dopt.parse())
         .unwrap_or_else(|e| e.exit());
+
+    let log = sloggers::terminal::TerminalLoggerBuilder::new()
+        .level(sloggers::types::Severity::Trace)
+        .channel_size(4096)
+        .build()
+        .unwrap();
 
     let socket = net::UdpSocket::bind(args.get_str("--listen"))?;
 
@@ -85,6 +90,8 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let mut clients = ClientMap::new();
 
     let mut config = quiche::Config::new(quiche::VERSION_DRAFT18)?;
+
+    config.logger(log.clone());
 
     config.load_cert_chain_from_pem_file(args.get_str("--cert"))?;
     config.load_priv_key_from_pem_file(args.get_str("--key"))?;
@@ -118,7 +125,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
         'read: loop {
             if events.is_empty() {
-                debug!("timed out");
+                debug!(log, "timed out");
 
                 clients.values_mut().for_each(|(_, c)| c.conn.on_timeout());
 
@@ -130,7 +137,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::WouldBlock {
-                        debug!("recv() would block");
+                        debug!(log, "recv() would block");
                         break 'read;
                     }
 
@@ -138,7 +145,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 },
             };
 
-            debug!("got {} bytes", len);
+            debug!(log, "got {} bytes", len);
 
             let pkt_buf = &mut buf[..len];
 
@@ -149,26 +156,26 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 Ok(v) => v,
 
                 Err(e) => {
-                    error!("Parsing packet header failed: {:?}", e);
+                    error!(log, "Parsing packet header failed: {:?}", e);
                     continue;
                 },
             };
 
-            trace!("got packet {:?}", hdr);
+            trace!(log, "got packet {:?}", hdr);
 
             if hdr.ty == quiche::Type::VersionNegotiation {
-                error!("Version negotiation invalid on the server");
+                error!(log, "Version negotiation invalid on the server");
                 continue;
             }
 
             let (_, client) = if !clients.contains_key(&hdr.dcid) {
                 if hdr.ty != quiche::Type::Initial {
-                    error!("Packet is not Initial");
+                    error!(log, "Packet is not Initial");
                     continue;
                 }
 
                 if hdr.version != quiche::VERSION_DRAFT18 {
-                    warn!("Doing version negotiation");
+                    warn!(log, "Doing version negotiation");
 
                     let len = quiche::negotiate_version(
                         &hdr.scid, &hdr.dcid, &mut out,
@@ -190,7 +197,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
                     let token = hdr.token.as_ref().unwrap();
 
                     if token.is_empty() {
-                        warn!("Doing stateless retry");
+                        warn!(log, "Doing stateless retry");
 
                         let new_token = mint_token(&hdr, &src);
 
@@ -206,7 +213,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
                     odcid = validate_token(&src, token);
 
                     if odcid == None {
-                        error!("Invalid address validation token");
+                        error!(log, "Invalid address validation token");
                         continue;
                     }
 
@@ -214,6 +221,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 }
 
                 debug!(
+                    log,
                     "New connection: dcid={} scid={}",
                     hex_dump(&hdr.dcid),
                     hex_dump(&scid)
@@ -238,21 +246,27 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 Ok(v) => v,
 
                 Err(quiche::Error::Done) => {
-                    debug!("{} done reading", client.conn.trace_id());
+                    debug!(log, "{} done reading", client.conn.trace_id());
                     break;
                 },
 
                 Err(e) => {
-                    error!("{} recv failed: {:?}", client.conn.trace_id(), e);
+                    error!(
+                        log,
+                        "{} recv failed: {:?}",
+                        client.conn.trace_id(),
+                        e
+                    );
                     client.conn.close(false, e.to_wire(), b"fail").ok();
                     break 'read;
                 },
             };
 
-            debug!("{} processed {} bytes", client.conn.trace_id(), read);
+            debug!(log, "{} processed {} bytes", client.conn.trace_id(), read);
 
             if client.conn.is_established() && client.http3_conn.is_none() {
                 debug!(
+                    log,
                     "{} QUIC handshake completed, now trying HTTP/3",
                     client.conn.trace_id()
                 );
@@ -266,7 +280,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
                     Ok(v) => v,
 
                     Err(e) => {
-                        error!("failed to create HTTP/3 connection: {}", e);
+                        error!(log, "failed to create HTTP/3 connection: {}", e);
                         break 'read;
                     },
                 };
@@ -284,11 +298,13 @@ fn main() -> Result<(), Box<std::error::Error>> {
                             stream_id,
                             &headers,
                             args.get_str("--root"),
+                            &log,
                         );
                     },
 
                     Ok((stream_id, quiche::h3::Event::Data(data))) => {
                         info!(
+                            log,
                             "{} got request data of length {} in stream id {}",
                             client.conn.trace_id(),
                             data.len(),
@@ -299,7 +315,12 @@ fn main() -> Result<(), Box<std::error::Error>> {
                     Err(quiche::h3::Error::Done) => {},
 
                     Err(e) => {
-                        error!("{} HTTP/3 error {:?}", client.conn.trace_id(), e);
+                        error!(
+                            log,
+                            "{} HTTP/3 error {:?}",
+                            client.conn.trace_id(),
+                            e
+                        );
                         break;
                     },
                 }
@@ -312,12 +333,17 @@ fn main() -> Result<(), Box<std::error::Error>> {
                     Ok(v) => v,
 
                     Err(quiche::Error::Done) => {
-                        debug!("{} done writing", client.conn.trace_id());
+                        debug!(log, "{} done writing", client.conn.trace_id());
                         break;
                     },
 
                     Err(e) => {
-                        error!("{} send failed: {:?}", client.conn.trace_id(), e);
+                        error!(
+                            log,
+                            "{} send failed: {:?}",
+                            client.conn.trace_id(),
+                            e
+                        );
                         client.conn.close(false, e.to_wire(), b"fail").ok();
                         break;
                     },
@@ -326,16 +352,17 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 // TODO: coalesce packets.
                 socket.send_to(&out[..write], &peer)?;
 
-                debug!("{} written {} bytes", client.conn.trace_id(), write);
+                debug!(log, "{} written {} bytes", client.conn.trace_id(), write);
             }
         }
 
         // Garbage collect closed connections.
         clients.retain(|_, (_, ref mut c)| {
-            debug!("Collecting garbage");
+            debug!(log, "Collecting garbage");
 
             if c.conn.is_closed() {
                 info!(
+                    log,
                     "{} connection collected {:?}",
                     c.conn.trace_id(),
                     c.conn.stats()
@@ -398,9 +425,10 @@ fn hex_dump(buf: &[u8]) -> String {
 
 fn handle_request(
     conn: &mut quiche::Connection, http3_conn: &mut quiche::h3::Connection,
-    stream_id: u64, headers: &[quiche::h3::Header], root: &str,
+    stream_id: u64, headers: &[quiche::h3::Header], root: &str, log: &Logger,
 ) {
     info!(
+        log,
         "{} got request {:?} on stream id {}",
         conn.trace_id(),
         headers,
@@ -412,16 +440,16 @@ fn handle_request(
             if let Err(e) =
                 http3_conn.send_response(conn, stream_id, &headers, false)
             {
-                error!("{} stream send failed {:?}", conn.trace_id(), e);
+                error!(log, "{} stream send failed {:?}", conn.trace_id(), e);
             }
 
             if let Err(e) = http3_conn.send_body(conn, stream_id, &body, true) {
-                error!("{} stream send failed {:?}", conn.trace_id(), e);
+                error!(log, "{} stream send failed {:?}", conn.trace_id(), e);
             }
         },
 
         Err(e) => {
-            error!("{} failed to build response {:?}", conn.trace_id(), e);
+            error!(log, "{} failed to build response {:?}", conn.trace_id(), e);
         },
     }
 }

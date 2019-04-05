@@ -226,7 +226,7 @@
 //! [HTTP/3 module]: h3/index.html
 
 #[macro_use]
-extern crate log;
+extern crate slog;
 
 use std::cmp;
 use std::mem;
@@ -352,6 +352,8 @@ impl std::error::Error for Error {
 
 /// Stores configuration shared between multiple connections.
 pub struct Config {
+    log: slog::Logger,
+
     local_transport_params: TransportParams,
 
     version: u32,
@@ -375,12 +377,18 @@ impl Config {
         let tls_ctx = tls::Context::new().map_err(|_| Error::TlsFail)?;
 
         Ok(Config {
+            log: slog::Logger::root(slog::Discard, o!()),
             local_transport_params: TransportParams::default(),
             version,
             tls_ctx,
             application_protos: Vec::new(),
             grease: true,
         })
+    }
+
+    /// Configures the logger to use for future connections.
+    pub fn logger(&mut self, logger: slog::Logger) {
+        self.log = logger;
     }
 
     /// Configures the given certificate chain.
@@ -537,6 +545,9 @@ impl Config {
 
 /// A QUIC connection.
 pub struct Connection {
+    /// Logger.
+    log: slog::Logger,
+
     /// QUIC wire version used for the connection.
     version: u32,
 
@@ -815,7 +826,11 @@ impl Connection {
         let scid_as_hex: Vec<String> =
             scid.iter().map(|b| format!("{:02x}", b)).collect();
 
+        let log = config.log.new(o!("conn_id" => scid_as_hex.join("")));
+
         let mut conn = Box::new(Connection {
+            log,
+
             version: config.version,
 
             dcid: Vec::new(),
@@ -1022,7 +1037,7 @@ impl Connection {
                 return Err(Error::Done);
             }
 
-            trace!("{} rx pkt {:?}", self.trace_id, hdr);
+            trace!(self.log, "version negotiation"; &hdr);
 
             let versions = match hdr.versions {
                 Some(ref v) => v,
@@ -1068,7 +1083,7 @@ impl Connection {
                 return Err(Error::Done);
             }
 
-            trace!("{} rx pkt {:?}", self.trace_id, hdr);
+            trace!(self.log, "retry"; &hdr);
 
             self.token = hdr.token;
             self.did_retry = true;
@@ -1145,11 +1160,9 @@ impl Connection {
             Some(ref v) => v,
 
             None => {
-                trace!(
-                    "{} dropped undecryptable packet type={:?} len={}",
-                    self.trace_id,
-                    hdr.ty,
-                    payload_len
+                trace!(self.log, "drop pkt";
+                    "type" => ?hdr.ty,
+                    "len" => payload_len,
                 );
 
                 return Ok(b.off() + payload_len);
@@ -1166,13 +1179,7 @@ impl Connection {
             hdr.pkt_num_len,
         );
 
-        trace!(
-            "{} rx pkt {:?} len={} pn={}",
-            self.trace_id,
-            hdr,
-            payload_len,
-            pn
-        );
+        trace!(self.log, "rx pkt"; &hdr, "len" => payload_len, "pkt_num" => pn);
 
         let mut payload = match packet::decrypt_pkt(
             &mut b,
@@ -1188,11 +1195,9 @@ impl Connection {
                 // needs to be removed from the payload length.
                 let payload_len = payload_len - hdr.pkt_num_len;
 
-                trace!(
-                    "{} dropped undecryptable packet type={:?} len={}",
-                    self.trace_id,
-                    hdr.ty,
-                    payload_len,
+                trace!(self.log, "drop pkt";
+                    "type" => ?hdr.ty,
+                    "len" => payload_len,
                 );
 
                 return Ok(b.off() + payload_len);
@@ -1202,7 +1207,12 @@ impl Connection {
         };
 
         if self.pkt_num_spaces[epoch].recv_pkt_num.contains(pn) {
-            trace!("{} ignored duplicate packet {}", self.trace_id, pn);
+            trace!(self.log, "dup pkt";
+                "type" => ?hdr.ty,
+                "len" => payload_len,
+                "pn" => pn,
+            );
+
             return Err(Error::Done);
         }
 
@@ -1215,7 +1225,7 @@ impl Connection {
         while payload.cap() > 0 {
             let frame = frame::Frame::from_bytes(&mut payload, hdr.ty)?;
 
-            trace!("{} rx frm {:?}", self.trace_id, frame);
+            trace!(self.log, "rx frm"; &frame);
 
             match frame {
                 frame::Frame::Padding { .. } => (),
@@ -1231,12 +1241,10 @@ impl Connection {
                         );
 
                     self.recovery.on_ack_received(
-                        &ranges,
-                        ack_delay,
-                        epoch,
-                        now,
-                        &self.trace_id,
+                        &ranges, ack_delay, epoch, now, &self.log,
                     );
+
+                    trace!(self.log, "recovery"; &self.recovery);
                 },
 
                 frame::Frame::ResetStream {
@@ -1897,17 +1905,11 @@ impl Connection {
 
         let payload_offset = b.off();
 
-        trace!(
-            "{} tx pkt {:?} len={} pn={}",
-            self.trace_id,
-            hdr,
-            payload_len,
-            pn
-        );
+        trace!(self.log, "tx pkt"; &hdr, "len" => payload_len, "pkt_num" => pn);
 
         // Encode frames into the output packet.
         for frame in &frames {
-            trace!("{} tx frm {:?}", self.trace_id, frame);
+            trace!(self.log, "tx frm"; &frame);
 
             frame.to_bytes(&mut b)?;
         }
@@ -1936,8 +1938,9 @@ impl Connection {
             is_crypto,
         };
 
-        self.recovery
-            .on_packet_sent(sent_pkt, epoch, now, &self.trace_id);
+        self.recovery.on_packet_sent(sent_pkt, epoch, now);
+
+        trace!(self.log, "recovery"; &self.recovery);
 
         self.pkt_num_spaces[epoch].next_pkt_num += 1;
 
@@ -2135,7 +2138,7 @@ impl Connection {
             if self.draining_timer.is_some() &&
                 self.draining_timer.unwrap() <= now
             {
-                trace!("{} draining timeout expired", self.trace_id);
+                trace!(self.log, "draining timeout");
 
                 self.closed = true;
             }
@@ -2144,7 +2147,7 @@ impl Connection {
         }
 
         if self.idle_timer.is_some() && self.idle_timer.unwrap() <= now {
-            trace!("{} idle timeout expired", self.trace_id);
+            trace!(self.log, "idle timeout");
 
             self.closed = true;
             return;
@@ -2153,10 +2156,11 @@ impl Connection {
         if self.recovery.loss_detection_timer().is_some() &&
             self.recovery.loss_detection_timer().unwrap() <= now
         {
-            trace!("{} loss detection timeout expired", self.trace_id);
+            trace!(self.log, "loss detection timeout");
 
-            self.recovery.on_loss_detection_timeout(now, &self.trace_id);
+            self.recovery.on_loss_detection_timeout(now, &self.log);
 
+            trace!(self.log, "recovery"; &self.recovery);
             return;
         }
     }
@@ -2194,6 +2198,11 @@ impl Connection {
         }
 
         Ok(())
+    }
+
+    /// Configures the logger to use for this connection.
+    pub fn logger(&mut self, logger: slog::Logger) {
+        self.log = logger;
     }
 
     /// Returns a string uniquely representing the connection.
@@ -2281,12 +2290,12 @@ impl Connection {
 
                     self.peer_transport_params = peer_params;
 
-                    trace!("{} connection established: cipher={:?} proto={:?} resumed={} {:?}",
-                           &self.trace_id,
-                           self.tls_state.cipher(),
-                           std::str::from_utf8(self.application_proto()),
-                           self.is_resumed(),
-                           self.peer_transport_params);
+                    trace!(self.log, "connection established";
+                        "cipher" => ?self.tls_state.cipher(),
+                        "proto" => ?std::str::from_utf8(self.application_proto()),
+                        "resumed" => self.is_resumed(),
+                        &self.peer_transport_params,
+                    );
                 },
 
                 Err(tls::Error::TlsFail) => {
@@ -2362,7 +2371,7 @@ impl Connection {
         self.pkt_num_spaces[packet::EPOCH_INITIAL].clear();
         self.recovery.drop_unacked_data(packet::EPOCH_INITIAL);
 
-        trace!("{} dropped initial state", self.trace_id);
+        trace!(self.log, "dropped initial state");
     }
 }
 
@@ -2686,6 +2695,35 @@ impl std::fmt::Debug for TransportParams {
         write!(f, "ack_delay_exponent={} ", self.ack_delay_exponent)?;
         write!(f, "max_ack_delay={} ", self.max_ack_delay)?;
         write!(f, "disable_migration={}", self.disable_migration)?;
+
+        Ok(())
+    }
+}
+
+impl slog::KV for TransportParams {
+    fn serialize(
+        &self, _r: &slog::Record, s: &mut slog::Serializer,
+    ) -> slog::Result {
+        s.emit_u64("idle_timeout", self.idle_timeout)?;
+        s.emit_u64("max_packet_size", self.max_packet_size)?;
+        s.emit_u64("initial_max_data", self.initial_max_data)?;
+        s.emit_u64(
+            "initial_max_stream_data_bidi_local",
+            self.initial_max_stream_data_bidi_local,
+        )?;
+        s.emit_u64(
+            "initial_max_stream_data_bidi_remote",
+            self.initial_max_stream_data_bidi_remote,
+        )?;
+        s.emit_u64(
+            "initial_max_stream_data_uni",
+            self.initial_max_stream_data_uni,
+        )?;
+        s.emit_u64("initial_max_streams_bidi", self.initial_max_streams_bidi)?;
+        s.emit_u64("initial_max_streams_uni", self.initial_max_streams_uni)?;
+        s.emit_u64("ack_delay_exponent", self.ack_delay_exponent)?;
+        s.emit_u64("max_ack_delay", self.max_ack_delay)?;
+        s.emit_bool("disable_migration", self.disable_migration)?;
 
         Ok(())
     }

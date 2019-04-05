@@ -597,12 +597,12 @@ impl Connection {
             self.send_grease_frames(conn, stream_id)?;
         }
 
-        trace!(
-            "{} sending HEADERS of size {} on stream {}",
-            conn.trace_id(),
-            off + len,
-            stream_id
-        );
+        // trace!(
+        //     "{} sending HEADERS of size {} on stream {}",
+        //     conn.trace_id(),
+        //     off + len,
+        //     stream_id
+        // );
 
         conn.stream_send(stream_id, &d[..off], fin)?;
 
@@ -626,12 +626,12 @@ impl Connection {
 
         let off = b.off();
 
-        trace!(
-            "{} sending DATA frame of size {} on stream {}",
-            conn.trace_id(),
-            off + body.len(),
-            stream_id
-        );
+        // trace!(
+        //     "{} sending DATA frame of size {} on stream {}",
+        //     conn.trace_id(),
+        //     off + body.len(),
+        //     stream_id
+        // );
 
         conn.stream_send(stream_id, &d[..off], false)?;
 
@@ -655,7 +655,7 @@ impl Connection {
 
         // Process HTTP/3 data from readable streams.
         for s in streams {
-            trace!("{} stream id {} is readable", conn.trace_id(), s);
+            // trace!("{} stream id {} is readable", conn.trace_id(), s);
 
             loop {
                 match self.handle_stream(conn, s) {
@@ -674,7 +674,7 @@ impl Connection {
 
         for (stream_id, stream) in self.streams.iter_mut() {
             if let Some(frame) = stream.get_frame() {
-                trace!("{} rx frm {:?}", conn.trace_id(), frame);
+                // trace!("{} rx frm {:?}", conn.trace_id(), frame);
 
                 match frame {
                     frame::Frame::Settings {
@@ -807,11 +807,11 @@ impl Connection {
         b.put_varint(18)?;
         b.put_u8(0x2a)?;
 
-        trace!(
-            "{} sending GREASE frames on stream {}",
-            conn.trace_id(),
-            stream_id
-        );
+        // trace!(
+        //     "{} sending GREASE frames on stream {}",
+        //     conn.trace_id(),
+        //     stream_id
+        // );
 
         let off = b.off();
         conn.stream_send(stream_id, &d[..off], false)?;
@@ -869,12 +869,12 @@ impl Connection {
         let (read, _fin) = conn.stream_recv(stream_id, &mut d)?;
         stream.push(&d[..read])?;
 
-        trace!(
-            "{} read {} bytes on stream {}",
-            conn.trace_id(),
-            read,
-            stream_id
-        );
+        // trace!(
+        //     "{} read {} bytes on stream {}",
+        //     conn.trace_id(),
+        //     read,
+        //     stream_id
+        // );
 
         while stream.more() {
             match stream.state() {
@@ -897,11 +897,11 @@ impl Connection {
                                 return Err(Error::WrongStreamCount);
                             }
 
-                            trace!(
-                                "{} peer's control stream: {}",
-                                conn.trace_id(),
-                                stream_id
-                            );
+                            // trace!(
+                            //     "{} peer's control stream: {}",
+                            //     conn.trace_id(),
+                            //     stream_id
+                            // );
 
                             self.peer_control_stream_id = Some(stream_id);
                         },

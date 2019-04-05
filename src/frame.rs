@@ -683,6 +683,125 @@ impl std::fmt::Debug for Frame {
     }
 }
 
+impl slog::KV for Frame {
+    fn serialize(
+        &self, _r: &slog::Record, s: &mut slog::Serializer,
+    ) -> slog::Result {
+        match self {
+            Frame::Padding { len } => {
+                s.emit_str("type", "PADDING")?;
+                s.emit_usize("len", *len)?;
+            },
+
+            Frame::Ping => {
+                s.emit_str("type", "PING")?;
+            },
+
+            Frame::ACK { ack_delay, ranges } => {
+                s.emit_str("type", "ACK")?;
+                s.emit_u64("delay", *ack_delay)?;
+                s.emit_arguments("blocks", &format_args!("{:?}", ranges))?;
+            },
+
+            Frame::ResetStream {
+                stream_id,
+                error_code,
+                final_size,
+            } => {
+                s.emit_str("type", "RESET_STREAM")?;
+                s.emit_u64("stream", *stream_id)?;
+                s.emit_u16("err", *error_code)?;
+                s.emit_u64("size", *final_size)?;
+            },
+
+            Frame::StopSending {
+                stream_id,
+                error_code,
+            } => {
+                s.emit_str("type", "STOP_SENDING")?;
+                s.emit_u64("stream", *stream_id)?;
+                s.emit_u16("err", *error_code)?;
+            },
+
+            Frame::Crypto { data } => {
+                s.emit_str("type", "CRYPTO")?;
+                s.emit_usize("off", data.off())?;
+                s.emit_usize("len", data.len())?;
+            },
+
+            Frame::NewToken { .. } => {
+                s.emit_str("type", "NEW_TOKEN")?;
+            },
+
+            Frame::Stream { stream_id, data } => {
+                s.emit_str("type", "STREAM")?;
+                s.emit_u64("stream", *stream_id)?;
+                s.emit_usize("off", data.off())?;
+                s.emit_usize("len", data.len())?;
+                s.emit_bool("fin", data.fin())?;
+            },
+
+            Frame::MaxData { max } => {
+                s.emit_str("type", "MAX_DATA")?;
+                s.emit_u64("max", *max)?;
+            },
+
+            Frame::MaxStreamData { stream_id, max } => {
+                s.emit_str("type", "MAX_STREAM_DATA")?;
+                s.emit_u64("stream", *stream_id)?;
+                s.emit_u64("max", *max)?;
+            },
+
+            Frame::MaxStreamsBidi { max } => {
+                s.emit_str("type", "MAX_STREAMS_BIDI")?;
+                s.emit_u64("max", *max)?;
+            },
+
+            Frame::MaxStreamsUni { max } => {
+                s.emit_str("type", "MAX_STREAMS_UNI")?;
+                s.emit_u64("max", *max)?;
+            },
+
+            Frame::NewConnectionId { .. } => {
+                s.emit_str("type", "NEW_CONNECTION_ID")?;
+            },
+
+            Frame::RetireConnectionId { .. } => {
+                s.emit_str("type", "RETIRE_CONNECTION_ID")?;
+            },
+
+            Frame::PathChallenge { data } => {
+                s.emit_str("type", "PATH_CHALLENGE")?;
+                s.emit_arguments("data", &format_args!("{:02x?}", data))?;
+            },
+
+            Frame::PathResponse { data } => {
+                s.emit_str("type", "PATH_RESPONSE")?;
+                s.emit_arguments("data", &format_args!("{:02x?}", data))?;
+            },
+
+            Frame::ConnectionClose {
+                error_code,
+                frame_type,
+                reason,
+            } => {
+                s.emit_str("type", "CONNECTION_CLOSE")?;
+                s.emit_u16("err", *error_code)?;
+                s.emit_u64("frame", *frame_type)?;
+                s.emit_arguments("reason", &format_args!("{:x?}", reason))?;
+            },
+
+            Frame::ApplicationClose { error_code, reason } => {
+                s.emit_str("type", "APPLICATION_CLOSE")?;
+                s.emit_u16("err", *error_code)?;
+                s.emit_arguments("reason", &format_args!("{:x?}", reason))?;
+            },
+        }
+
+        Ok(())
+    }
+}
+
 fn parse_ack_frame(_ty: u64, b: &mut octets::Octets) -> Result<Frame> {
     let largest_ack = b.get_varint()?;
     let ack_delay = b.get_varint()?;

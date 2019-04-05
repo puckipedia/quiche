@@ -29,16 +29,17 @@ features = ["no_bssl"]
 cmake = "0"
 
 [dependencies]
-log = "0"
+slog = { version = "2", features = ["max_level_trace", "release_max_level_trace"] }
 libc = "0"
 ring = "0.14"
 lazy_static = "1"
 
 [dev-dependencies]
+slog = { version = "2", features = ["max_level_trace", "release_max_level_trace"] }
+sloggers = "0"
 mio = "0"
 url = "1"
 docopt = "1"
-env_logger = "0"
 
 [profile.release]
 debug = true

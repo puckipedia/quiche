@@ -422,6 +422,42 @@ impl std::fmt::Debug for Header {
     }
 }
 
+impl slog::KV for Header {
+    fn serialize(
+        &self, _r: &slog::Record, s: &mut slog::Serializer,
+    ) -> slog::Result {
+        s.emit_arguments("type", &format_args!("{:?}", self.ty))?;
+
+        if self.ty != Type::Application {
+            s.emit_u32("version", self.version)?;
+        }
+
+        s.emit_arguments("dcid", &format_args!("{:02x?}", self.dcid))?;
+
+        if self.ty != Type::Application {
+            s.emit_arguments("scid", &format_args!("{:02x?}", self.scid))?;
+        }
+
+        if let Some(ref odcid) = self.odcid {
+            s.emit_arguments("odcid", &format_args!("{:02x?}", odcid))?;
+        }
+
+        if let Some(ref token) = self.token {
+            s.emit_arguments("token", &format_args!("{:02x?}", token))?;
+        }
+
+        if let Some(ref versions) = self.versions {
+            s.emit_arguments("versions", &format_args!("{:x?}", versions))?;
+        }
+
+        if self.ty == Type::Application {
+            s.emit_bool("key_phase", self.key_phase)?;
+        }
+
+        Ok(())
+    }
+}
+
 pub fn pkt_num_len(pn: u64) -> Result<usize> {
     let len = if pn < u64::from(std::u8::MAX) {
         1

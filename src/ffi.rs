@@ -28,7 +28,6 @@
 use std::ffi;
 use std::ptr;
 use std::slice;
-use std::sync::atomic;
 
 use libc::c_char;
 use libc::c_int;
@@ -37,33 +36,33 @@ use libc::ssize_t;
 
 use crate::*;
 
-struct Logger {
-    cb: extern fn(line: *const u8, argp: *mut c_void),
-    argp: std::sync::atomic::AtomicPtr<c_void>,
-}
+// struct Logger {
+//     cb: extern fn(line: *const u8, argp: *mut c_void),
+//     argp: std::sync::atomic::AtomicPtr<c_void>,
+// }
 
-impl log::Log for Logger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
+// impl log::Log for Logger {
+//     fn enabled(&self, _metadata: &log::Metadata) -> bool {
+//         true
+//     }
 
-    fn log(&self, record: &log::Record) {
-        let line = format!("{}: {}\0", record.target(), record.args());
-        (self.cb)(line.as_ptr(), self.argp.load(atomic::Ordering::Relaxed));
-    }
+//     fn log(&self, record: &log::Record) {
+//         let line = format!("{}: {}\0", record.target(), record.args());
+//         (self.cb)(line.as_ptr(), self.argp.load(atomic::Ordering::Relaxed));
+//     }
 
-    fn flush(&self) {}
-}
+//     fn flush(&self) {}
+// }
 
 #[no_mangle]
 pub extern fn quiche_enable_debug_logging(
     cb: extern fn(line: *const u8, argp: *mut c_void), argp: *mut c_void,
 ) {
-    let argp = atomic::AtomicPtr::new(argp);
-    let logger = Box::new(Logger { cb, argp });
+    // let argp = atomic::AtomicPtr::new(argp);
+    // let logger = Box::new(Logger { cb, argp });
 
-    log::set_boxed_logger(logger).unwrap();
-    log::set_max_level(log::LevelFilter::Trace);
+    // log::set_boxed_logger(logger).unwrap();
+    // log::set_max_level(log::LevelFilter::Trace);
 }
 
 #[no_mangle]

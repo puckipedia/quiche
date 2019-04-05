@@ -396,11 +396,7 @@ extern fn set_encryption_secrets(
             None => return 0,
         };
 
-    trace!(
-        "{} tls set encryption secret lvl={:?}",
-        conn.trace_id,
-        level
-    );
+    trace!(conn.log, "set encryption secret"; "level" => ?level);
 
     let space = match level {
         crypto::Level::Initial => &mut conn.pkt_num_spaces[packet::EPOCH_INITIAL],
@@ -478,12 +474,7 @@ extern fn add_handshake_data(
             None => return 0,
         };
 
-    trace!(
-        "{} tls write message lvl={:?} len={}",
-        conn.trace_id,
-        level,
-        len
-    );
+    trace!(conn.log, "tls message"; "level" => ?level, "len" => len);
 
     let buf = unsafe { slice::from_raw_parts(data, len) };
 
@@ -517,12 +508,7 @@ extern fn send_alert(ssl: *mut SSL, level: crypto::Level, alert: u8) -> c_int {
             None => return 0,
         };
 
-    trace!(
-        "{} tls send alert lvl={:?} alert={:x}",
-        conn.trace_id,
-        level,
-        alert
-    );
+    trace!(conn.log, "tls alert"; "level" => ?level, "alert" => alert);
 
     let error: u16 = TLS_ALERT_ERROR + u16::from(alert);
     conn.error = Some(error);
@@ -659,7 +645,7 @@ fn log_ssl_error() {
         ERR_error_string_n(e, err.as_ptr(), err.len());
     }
 
-    trace!("{}", std::str::from_utf8(&err).unwrap());
+    // trace!("{}", std::str::from_utf8(&err).unwrap());
 }
 
 extern {
