@@ -57,6 +57,7 @@ pub enum State {
     FramePayloadLenLen,
     FramePayloadLen,
     FramePayload,
+    Data,
     PushIdLen,
     PushId,
     QpackInstruction,
@@ -92,6 +93,7 @@ pub struct Stream {
     frame_payload_len: u64,
     frame_type: Option<u64>,
     frames: VecDeque<frame::Frame>,
+    data_left: usize,
 }
 
 impl Stream {
@@ -121,11 +123,20 @@ impl Stream {
             frame_payload_len: 0,
             frame_type: None,
             frames: VecDeque::new(),
+            data_left: 0,
         }
     }
 
     pub fn state(&self) -> State {
         self.state
+    }
+
+    pub fn data_left(&self) -> usize {
+        self.data_left
+    }
+
+    pub fn dec_data_left(&mut self, dec: usize) {
+        self.data_left -= dec;
     }
 
     pub fn get_frame(&mut self) -> Option<frame::Frame> {
@@ -311,6 +322,12 @@ impl Stream {
             self.frame_payload_len,
             self.buf_bytes(self.frame_payload_len as usize)?,
         ) {
+            match frame {
+                frame::Frame::Data { payload_len } => self.data_left = payload_len,
+
+                _ => (),
+            }
+
             self.frames.push_back(frame);
         }
 
@@ -322,8 +339,12 @@ impl Stream {
         // bytes were seen by the application layer.
         self.stream_offset += self.frame_payload_len;
 
-        // Set state to parse next frame
-        self.state = State::FrameTypeLen;
+        if self.frame_type == Some(frame::DATA_FRAME_TYPE_ID) {
+            self.state = State::Data;
+        } else {
+            // Set state to parse next frame
+            self.state = State::FrameTypeLen;
+        }
 
         Ok(())
     }
@@ -604,7 +625,9 @@ mod tests {
         let header_block = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         let payload = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         let hdrs = frame::Frame::Headers { header_block };
-        let data = frame::Frame::Data { payload };
+        let data = frame::Frame::Data {
+            payload_len: payload.len(),
+        };
 
         hdrs.to_bytes(&mut b).unwrap();
         data.to_bytes(&mut b).unwrap();
@@ -686,7 +709,9 @@ mod tests {
         let header_block = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         let payload = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         let hdrs = frame::Frame::Headers { header_block };
-        let data = frame::Frame::Data { payload };
+        let data = frame::Frame::Data {
+            payload_len: payload.len(),
+        };
 
         b.put_varint(HTTP3_PUSH_STREAM_TYPE_ID).unwrap();
         b.put_varint(1).unwrap();

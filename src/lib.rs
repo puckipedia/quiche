@@ -2043,13 +2043,17 @@ impl Connection {
             None => return Err(Error::InvalidStreamState),
         };
 
+        println!("WOOOT 1");
+
         if !stream.readable() {
             return Err(Error::Done);
         }
+        println!("WOOOT 2");
 
         let (read, fin) = stream.recv.pop(out)?;
 
         self.new_max_rx_data = self.max_rx_data + read;
+        println!("WOOOT 3 {}", read);
 
         Ok((read, fin))
     }

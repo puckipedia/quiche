@@ -225,17 +225,23 @@ fn main() {
                         );
                     },
 
-                    Ok((stream_id, quiche::h3::Event::Data(data))) => {
+                    Ok((stream_id, quiche::h3::Event::Data(data_len))) => {
                         debug!(
                             "{} got response data of length {} in stream id {}",
                             conn.trace_id(),
-                            data.len(),
+                            data_len,
                             stream_id
                         );
 
-                        print!("{}", unsafe {
-                            std::str::from_utf8_unchecked(&data)
-                        });
+                        let mut data = vec![0; data_len];
+
+                        while let Ok(read) =
+                            http3_conn.recv_body(&mut conn, stream_id, &mut data)
+                        {
+                            print!("{}", unsafe {
+                                std::str::from_utf8_unchecked(&data[..read])
+                            });
+                        }
 
                         if conn.stream_finished(stream_id) {
                             info!(

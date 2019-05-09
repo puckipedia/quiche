@@ -47,7 +47,7 @@ const SETTINGS_NUM_PLACEHOLDERS: u64 = 0x9;
 #[derive(Clone, PartialEq)]
 pub enum Frame {
     Data {
-        payload: Vec<u8>,
+        payload_len: usize,
     },
 
     Headers {
@@ -93,7 +93,7 @@ impl Frame {
         // TODO: handling of 0-length frames
         let frame = match frame_type {
             DATA_FRAME_TYPE_ID => Frame::Data {
-                payload: b.get_bytes(payload_length as usize)?.to_vec(),
+                payload_len: payload_length as usize,
             },
 
             HEADERS_FRAME_TYPE_ID => Frame::Headers {
@@ -132,11 +132,9 @@ impl Frame {
         let before = b.cap();
 
         match self {
-            Frame::Data { payload } => {
+            Frame::Data { payload_len } => {
                 b.put_varint(DATA_FRAME_TYPE_ID)?;
-                b.put_varint(payload.len() as u64)?;
-
-                b.put_bytes(payload.as_ref())?;
+                b.put_varint(*payload_len as u64)?;
             },
 
             Frame::Headers { header_block } => {
@@ -257,8 +255,8 @@ impl Frame {
 impl std::fmt::Debug for Frame {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Frame::Data { payload } => {
-                write!(f, "DATA len={}", payload.len())?;
+            Frame::Data { payload_len } => {
+                write!(f, "DATA len={}", payload_len)?;
             },
 
             Frame::Headers { header_block } => {
@@ -376,7 +374,9 @@ mod tests {
         let frame_payload_len = payload.len();
         let frame_header_len = 2;
 
-        let frame = Frame::Data { payload };
+        let frame = Frame::Data {
+            payload_len: payload.len(),
+        };
 
         let wire_len = {
             let mut b = octets::Octets::with_slice(&mut d);

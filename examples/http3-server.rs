@@ -294,11 +294,11 @@ fn main() {
                         );
                     },
 
-                    Ok((stream_id, quiche::h3::Event::Data(data))) => {
+                    Ok((stream_id, quiche::h3::Event::Data(data_len))) => {
                         info!(
                             "{} got request data of length {} in stream id {}",
                             client.conn.trace_id(),
-                            data.len(),
+                            data_len,
                             stream_id
                         );
                     },

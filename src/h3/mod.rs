@@ -458,7 +458,7 @@ pub enum Event {
     Headers(Vec<Header>),
 
     /// Data was received.
-    Data(Vec<u8>),
+    Data(usize),
 }
 
 struct ConnectionSettings {
@@ -663,6 +663,35 @@ impl Connection {
         Ok(written)
     }
 
+    pub fn recv_body(
+        &mut self, conn: &mut super::Connection, stream_id: u64, out: &mut [u8],
+    ) -> Result<usize> {
+        let stream = self.streams.get_mut(&stream_id).ok_or(Error::Done)?;
+
+        println!("LOOOL 1");
+
+        if stream.state() != stream::State::Data {
+            return Err(Error::Done);
+        }
+        println!("LOOOL 2");
+
+        let left = stream.data_left();
+
+        if left == 0 {
+            return Err(Error::Done);
+        }
+        println!("LOOOL 3 {}", left);
+
+        let (len, _) = conn.stream_recv(stream_id, &mut out[..left])?;
+        println!("LOOOL 4 {}", len);
+
+        stream.dec_data_left(len);
+
+        // TODO: reset stream state
+
+        Ok(len)
+    }
+
     /// Checks whether an open critical stream has been closed.
     fn critical_stream_closed(
         &mut self, conn: &mut super::Connection,
@@ -792,7 +821,7 @@ impl Connection {
                         return Ok((*stream_id, Event::Headers(headers)));
                     },
 
-                    frame::Frame::Data { payload } => {
+                    frame::Frame::Data { payload_len } => {
                         if Some(*stream_id) == self.peer_control_stream_id {
                             Connection::close_unexpected_frame(
                                 conn,
@@ -800,7 +829,7 @@ impl Connection {
                             )?;
                         }
 
-                        return Ok((*stream_id, Event::Data(payload)));
+                        return Ok((*stream_id, Event::Data(payload_len)));
                     },
 
                     frame::Frame::GoAway { .. } => {

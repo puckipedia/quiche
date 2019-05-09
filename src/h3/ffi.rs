@@ -132,19 +132,11 @@ pub extern fn quiche_h3_event_for_each_header(
 }
 
 #[no_mangle]
-pub extern fn quiche_h3_event_data(
-    ev: &h3::Event, out: *mut *const u8,
-) -> size_t {
+pub extern fn quiche_h3_event_data(ev: &h3::Event) -> size_t {
     match ev {
         h3::Event::Headers { .. } => unreachable!(),
 
-        h3::Event::Data(data) => {
-            unsafe {
-                *out = (&data).as_ptr();
-            }
-
-            data.len()
-        },
+        h3::Event::Data(data_len) => return *data_len,
     }
 }
 
