@@ -204,6 +204,8 @@ impl Drop for Context {
     }
 }
 
+unsafe impl Send for Context {}
+
 pub struct Handshake(*mut SSL);
 
 impl Handshake {
@@ -362,6 +364,8 @@ impl Drop for Handshake {
         unsafe { SSL_free(self.as_ptr()) }
     }
 }
+
+unsafe impl Send for Handshake {}
 
 fn get_ex_data_from_ptr<'a, T>(ptr: *mut SSL, idx: c_int) -> Option<&'a mut T> {
     unsafe {
